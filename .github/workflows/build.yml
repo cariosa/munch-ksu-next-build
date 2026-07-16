@@ -27,7 +27,7 @@ jobs:
           cd clang
           # Materialize strictly the required compiler directory contents
           git sparse-checkout set clang-r510928
-          
+
       - name: Clone Kernel Source
         run: |
           # Targeting the unified sm8250 branch for crDroid 12.x / 16.x
@@ -41,13 +41,12 @@ jobs:
       - name: Apply Defconfig Tweaks Safely
         run: |
           cd kernel
-          # Grouped find expression to locate the dynamic target configuration file
-          DEFCONFIG_PATH=$(find arch/arm64/configs -type f \( -name "*munch*_defconfig" -o -name "*munch*_user_defconfig" \) | head -n 1)
+          # Standard unified sm8250 configuration target file
+          DEFCONFIG_PATH="arch/arm64/configs/vendor/kona-perf_defconfig"
           
-          if [ -z "$DEFCONFIG_PATH" ]; then
-            echo "Target defconfig not found, falling back to basic vendor destination."
-            DEFCONFIG_PATH="arch/arm64/configs/vendor/munch_defconfig"
-            touch "$DEFCONFIG_PATH"
+          if [ ! -f "$DEFCONFIG_PATH" ]; then
+            echo "Kona perf configuration missing, checking architecture root layout..."
+            DEFCONFIG_PATH="arch/arm64/configs/kona-perf_defconfig"
           fi
           echo "Targeting configuration file: $DEFCONFIG_PATH"
           
@@ -63,12 +62,15 @@ jobs:
           # Perfect absolute routing to the localized toolchain binaries
           export PATH="$(pwd)/../clang/clang-r510928/bin:$PATH"
           
-          CONFIG_NAME=$(basename $(find arch/arm64/configs -type f \( -name "*munch*_defconfig" -o -name "*munch*_user_defconfig" \) | head -n 1))
-          if [ -z "$CONFIG_NAME" ]; then
-            CONFIG_NAME="munch_defconfig"
+          # Set the targeted configuration layout name explicitly
+          CONFIG_NAME="vendor/kona-perf_defconfig"
+          if [ ! -f "arch/arm64/configs/$CONFIG_NAME" ]; then
+            CONFIG_NAME="kona-perf_defconfig"
           fi
           
           make O=out ARCH=arm64 $CONFIG_NAME
+          
+          # Build via modern unified LLVM engine parameters
           make -j$(nproc --all) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1
 
       - name: Package with AnyKernel3
