@@ -23,8 +23,8 @@ jobs:
       - name: Download AOSP Clang Toolchain
         run: |
           mkdir -p clang
-          # Fetches a pre-packaged, standalone build of the exact AOSP r510928 compiler engine
-          curl -Lo clang.tar.gz "https://gitlab.com/flar2/twb/-/raw/main/clang-r510928.tar.gz"
+          # Fetches a direct tarball snapshot of the exact r510928 binaries via Google's Git API
+          curl -Lo clang.tar.gz "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r510928.tar.gz"
           tar -xzf clang.tar.gz -C clang
           rm clang.tar.gz
 
