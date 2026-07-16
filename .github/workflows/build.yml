@@ -18,7 +18,7 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf lib32readline-dev lib32z1-dev libelf-dev liblz4-tool libncurses5-dev libsdl1.1-dev libssl-dev libxml2 libxml2-utils lzops pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev cpio
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf lib32readline-dev lib32z1-dev libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev cpio
 
       - name: Clone Toolchain (Clang)
         run: |
@@ -26,7 +26,7 @@ jobs:
 
       - name: Clone Kernel Source
         run: |
-          # Dynamically targeting the exact branch matching crDroid 12.x structure
+          # Targeting the unified sm8250 master development branch used for crDroid 16.x
           git clone --depth=1 -b 16.0-alioth https://github.com/crdroidandroid/android_kernel_xiaomi_sm8250.git kernel
 
       - name: Inject KernelSU-Next
@@ -37,12 +37,12 @@ jobs:
       - name: Apply Defconfig Tweaks
         run: |
           cd kernel
-          # Dynamically search and append to the exact location of the target defconfig layout
+          # Search for the exact munch layout file inside the unified tree setup
           DEFCONFIG_PATH=$(find arch/arm64/configs/ -name "*munch*_defconfig" -o -name "*munch*_user_defconfig" | head -n 1)
           if [ -z "$DEFCONFIG_PATH" ]; then
             DEFCONFIG_PATH="arch/arm64/configs/vendor/munch_user_defconfig"
           fi
-          echo "Targeting defconfig: $DEFCONFIG_PATH"
+          echo "Targeting defconfig path: $DEFCONFIG_PATH"
           
           echo "CONFIG_KSU=y" >> $DEFCONFIG_PATH
           echo "CONFIG_KPROBES=y" >> $DEFCONFIG_PATH
@@ -57,7 +57,6 @@ jobs:
           export SUBARCH=arm64
           export CLANG_TRIPLE=aarch64-linux-gnu-
           
-          # Locating target config string name automatically
           CONFIG_NAME=$(basename $(find arch/arm64/configs/ -name "*munch*_defconfig" -o -name "*munch*_user_defconfig" | head -n 1))
           if [ -z "$CONFIG_NAME" ]; then
             CONFIG_NAME="munch_user_defconfig"
