@@ -20,13 +20,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf lib32readline-dev lib32z1-dev libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev cpio
 
-      - name: Clone Toolchain (Clang)
+      - name: Clone Specific AOSP Clang Toolchain
         run: |
-          git clone --depth=1 https://github.com/Hexagon-Clang/Azure-Clang.git clang
+          # Clones only the precise Clang-r510928 toolchain branch required for modern Android 16-based trees
+          git clone --depth=1 -b main https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/clang-r510928 clang
 
       - name: Clone Kernel Source
         run: |
-          # Targeting the unified sm8250 master development branch used for crDroid 16.x
+          # Targeting the unified sm8250 branch for crDroid 12.x / 16.x
           git clone --depth=1 -b 16.0-alioth https://github.com/crdroidandroid/android_kernel_xiaomi_sm8250.git kernel
 
       - name: Inject KernelSU-Next
@@ -34,54 +35,61 @@ jobs:
           cd kernel
           curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
 
-      - name: Apply Defconfig Tweaks
+      - name: Apply Defconfig Tweaks Safely
         run: |
           cd kernel
-          # Search for the exact munch layout file inside the unified tree setup
-          DEFCONFIG_PATH=$(find arch/arm64/configs/ -name "*munch*_defconfig" -o -name "*munch*_user_defconfig" | head -n 1)
-          if [ -z "$DEFCONFIG_PATH" ]; then
-            DEFCONFIG_PATH="arch/arm64/configs/vendor/munch_user_defconfig"
-          fi
-          echo "Targeting defconfig path: $DEFCONFIG_PATH"
+          # Grouped find expression fixes precedence issues
+          DEFCONFIG_PATH=$(find arch/arm64/configs -type f \( -name "*munch*_defconfig" -o -name "*munch*_user_defconfig" \) | head -n 1)
           
-          echo "CONFIG_KSU=y" >> $DEFCONFIG_PATH
-          echo "CONFIG_KPROBES=y" >> $DEFCONFIG_PATH
-          echo "CONFIG_KPROBE_EVENTS=y" >> $DEFCONFIG_PATH
-          echo "CONFIG_OVERLAY_FS=y" >> $DEFCONFIG_PATH
+          if [ -z "$DEFCONFIG_PATH" ]; then
+            echo "Target defconfig not found, falling back to basic vendor destination."
+            DEFCONFIG_PATH="arch/arm64/configs/vendor/munch_defconfig"
+            touch "$DEFCONFIG_PATH"
+          fi
+          echo "Targeting configuration file: $DEFCONFIG_PATH"
+          
+          # Idempotent editing: check if the string exists before appending to prevent line bloat
+          grep -q '^CONFIG_KSU=' "$DEFCONFIG_PATH" || echo "CONFIG_KSU=y" >> "$DEFCONFIG_PATH"
+          grep -q '^CONFIG_KPROBES=' "$DEFCONFIG_PATH" || echo "CONFIG_KPROBES=y" >> "$DEFCONFIG_PATH"
+          grep -q '^CONFIG_KPROBE_EVENTS=' "$DEFCONFIG_PATH" || echo "CONFIG_KPROBE_EVENTS=y" >> "$DEFCONFIG_PATH"
+          grep -q '^CONFIG_OVERLAY_FS=' "$DEFCONFIG_PATH" || echo "CONFIG_OVERLAY_FS=y" >> "$DEFCONFIG_PATH"
 
       - name: Compile Kernel
         run: |
           cd kernel
+          # Path points directly to the bin directory of the single isolated toolchain folder
           export PATH="$(pwd)/../clang/bin:$PATH"
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export CLANG_TRIPLE=aarch64-linux-gnu-
           
-          CONFIG_NAME=$(basename $(find arch/arm64/configs/ -name "*munch*_defconfig" -o -name "*munch*_user_defconfig" | head -n 1))
+          # Dynamic resolution of the clean configuration target name
+          CONFIG_NAME=$(basename $(find arch/arm64/configs -type f \( -name "*munch*_defconfig" -o -name "*munch*_user_defconfig" \) | head -n 1))
           if [ -z "$CONFIG_NAME" ]; then
-            CONFIG_NAME="munch_user_defconfig"
+            CONFIG_NAME="munch_defconfig"
           fi
           
-          make O=out $CONFIG_NAME
+          # Generate base architecture configuration slate
+          make O=out ARCH=arm64 $CONFIG_NAME
           
-          make -j$(nproc --all) O=out \
-            CC=clang \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip
+          # Build using full LLVM wrapper flags to handle compilation, linkage, and assembly inline
+          make -j$(nproc --all) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1
 
       - name: Package with AnyKernel3
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
-          cp kernel/out/arch/arm64/boot/Image AnyKernel3/
+          
+          # Dynamically capture compressed Image.gz target outputs
+          if [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
+            cp kernel/out/arch/arm64/boot/Image.gz AnyKernel3/
+          else
+            cp kernel/out/arch/arm64/boot/Image AnyKernel3/
+          fi
+          
           cd AnyKernel3
-          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
+          # Clean fallback configuration mappings for partition blocks
           sed -i 's/block=\/dev\/block\/platform\/omap\/omap_hsmmc.0\/by-name\/boot;/block=auto;/g' anykernel.sh
+          
+          # Set the explicit target device verification identity to protect against cross-flashing safety bugs
+          sed -i 's/device.name1=/device.name1=munch/g' anykernel.sh
+          
           zip -r9 ../KSU_Next_Munch_Kernel.zip * -x .git* README.md
 
       - name: Upload Flashable Artifact
