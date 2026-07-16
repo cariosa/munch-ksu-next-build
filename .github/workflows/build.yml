@@ -22,8 +22,15 @@ jobs:
 
       - name: Clone Specific AOSP Clang Toolchain
         run: |
-          # Clones only the precise Clang-r510928 toolchain branch required for modern Android 16-based trees
-          git clone --depth=1 -b main https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/clang-r510928 clang
+          mkdir clang
+          cd clang
+          git init
+          git remote add origin https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86
+          git config core.sparseCheckout true
+          # Instruct git to match only the versioned folder path we need
+          echo "clang-r510928/*" >> .git/info/sparse-checkout
+          # Fetch only the exact folder configuration from the stable Android release branch line
+          git pull --depth=1 origin refs/tags/android-14.0.0_r33
 
       - name: Clone Kernel Source
         run: |
@@ -57,19 +64,15 @@ jobs:
       - name: Compile Kernel
         run: |
           cd kernel
-          # Path points directly to the bin directory of the single isolated toolchain folder
-          export PATH="$(pwd)/../clang/bin:$PATH"
+          # Route the system PATH straight into the newly structured sparse directory layout
+          export PATH="$(pwd)/../clang/clang-r510928/bin:$PATH"
           
-          # Dynamic resolution of the clean configuration target name
           CONFIG_NAME=$(basename $(find arch/arm64/configs -type f \( -name "*munch*_defconfig" -o -name "*munch*_user_defconfig" \) | head -n 1))
           if [ -z "$CONFIG_NAME" ]; then
             CONFIG_NAME="munch_defconfig"
           fi
           
-          # Generate base architecture configuration slate
           make O=out ARCH=arm64 $CONFIG_NAME
-          
-          # Build using full LLVM wrapper flags to handle compilation, linkage, and assembly inline
           make -j$(nproc --all) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1
 
       - name: Package with AnyKernel3
