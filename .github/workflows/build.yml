@@ -20,14 +20,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf lib32readline-dev lib32z1-dev libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev cpio
 
-      - name: Download AOSP Clang Toolchain
+      - name: Clone Specific AOSP Clang Toolchain
         run: |
-          mkdir -p clang
-          # Fetches a direct tarball snapshot of the exact r510928 binaries via Google's Git API
-          curl -Lo clang.tar.gz "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r510928.tar.gz"
-          tar -xzf clang.tar.gz -C clang
-          rm clang.tar.gz
-
+          # Native sparse cloning downloads only the folder framework metadata
+          git clone --depth=1 --sparse -b main https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang
+          cd clang
+          # Materialize strictly the required compiler directory contents
+          git sparse-checkout set clang-r510928
+          
       - name: Clone Kernel Source
         run: |
           # Targeting the unified sm8250 branch for crDroid 12.x / 16.x
@@ -60,18 +60,15 @@ jobs:
       - name: Compile Kernel
         run: |
           cd kernel
-          # Path routes perfectly into the newly extracted toolchain bin structure
-          export PATH="$(pwd)/../clang/bin:$PATH"
+          # Perfect absolute routing to the localized toolchain binaries
+          export PATH="$(pwd)/../clang/clang-r510928/bin:$PATH"
           
-          # Dynamic target lookup for compilation commands
           CONFIG_NAME=$(basename $(find arch/arm64/configs -type f \( -name "*munch*_defconfig" -o -name "*munch*_user_defconfig" \) | head -n 1))
           if [ -z "$CONFIG_NAME" ]; then
             CONFIG_NAME="munch_defconfig"
           fi
           
           make O=out ARCH=arm64 $CONFIG_NAME
-          
-          # Build via modern unified LLVM engine parameters
           make -j$(nproc --all) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1
 
       - name: Package with AnyKernel3
