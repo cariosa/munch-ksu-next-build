@@ -1,0 +1,84 @@
+name: Build Kernel with KernelSU-Next
+on:
+  workflow_dispatch: # Allows manual trigger via the UI
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Maximize Disk Space
+        uses: easimon/minimize-disk-space@v1.0.0
+        with:
+          root-reserve-mb: 2048
+          swap-size-mb: 1024
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf lib32readline-dev lib32z1-dev libelf-dev liblz4-tool libncurses5-dev libsdl1.1-dev libssl-dev libxml2 libxml2-utils lzops pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev
+
+      - name: Clone Toolchain (Clang)
+        run: |
+          git clone --depth=1 https://github.com/Hexagon-Clang/Azure-Clang.git clang
+
+      - name: Clone Kernel Source
+        run: |
+          git clone --depth=1 -b 16.0-munch https://github.com/crdroidandroid/android_kernel_xiaomi_sm8250.git kernel
+
+      - name: Inject KernelSU-Next
+        run: |
+          cd kernel
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
+
+      - name: Apply Defconfig Tweaks
+        run: |
+          cd kernel
+          # Enable KernelSU and required Kprobes options inside target defconfig
+          echo "CONFIG_KSU=y" >> arch/arm64/configs/vendor/munch_user_defconfig
+          echo "CONFIG_KPROBES=y" >> arch/arm64/configs/vendor/munch_user_defconfig
+          echo "CONFIG_KPROBE_EVENTS=y" >> arch/arm64/configs/vendor/munch_user_defconfig
+          # Enforce proper overlayfs mapping for module mounting
+          echo "CONFIG_OVERLAY_FS=y" >> arch/arm64/configs/vendor/munch_user_defconfig
+
+      - name: Compile Kernel
+        run: |
+          cd kernel
+          export PATH="$(pwd)/../clang/bin:$PATH"
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          
+          # Clean build slate
+          make O=out vendor/munch_user_defconfig
+          
+          # Fire up multi-threaded compilation
+          make -j$(nproc --all) O=out \
+            CC=clang \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            LD=ld.lld \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip
+
+      - name: Package with AnyKernel3
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
+          # Replace default template placeholder binary with our freshly compiled image
+          cp kernel/out/arch/arm64/boot/Image AnyKernel3/
+          cd AnyKernel3
+          # Adjust AnyKernel configurations for munch (sm8250 dynamic slots layout)
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
+          sed -i 's/block=\/dev\/block\/platform\/omap\/omap_hsmmc.0\/by-name\/boot;/block=auto;/g' anykernel.sh
+          zip -r9 ../KSU_Next_Munch_Kernel.zip * -x .git* README.md
+
+      - name: Upload Flashable Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KSU-Next-Munch-Flashable
+          path: KSU_Next_Munch_Kernel.zip
