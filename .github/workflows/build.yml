@@ -1,13 +1,13 @@
 name: Build Kernel with KernelSU-Next
 on:
-  workflow_dispatch: # Allows manual trigger via the UI
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Maximize Disk Space
-        uses: easimon/minimize-disk-space@v1.0.0
+        uses: easimon/maximize-build-space@v10
         with:
           root-reserve-mb: 2048
           swap-size-mb: 1024
@@ -18,7 +18,7 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf lib32readline-dev lib32z1-dev libelf-dev liblz4-tool libncurses5-dev libsdl1.1-dev libssl-dev libxml2 libxml2-utils lzops pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf lib32readline-dev lib32z1-dev libelf-dev liblz4-tool libncurses5-dev libsdl1.1-dev libssl-dev libxml2 libxml2-utils lzops pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev cpio
 
       - name: Clone Toolchain (Clang)
         run: |
@@ -26,7 +26,8 @@ jobs:
 
       - name: Clone Kernel Source
         run: |
-          git clone --depth=1 -b 16.0-munch https://github.com/crdroidandroid/android_kernel_xiaomi_sm8250.git kernel
+          # Dynamically targeting the exact branch matching crDroid 12.x structure
+          git clone --depth=1 -b 16.0-alioth https://github.com/crdroidandroid/android_kernel_xiaomi_sm8250.git kernel
 
       - name: Inject KernelSU-Next
         run: |
@@ -36,12 +37,17 @@ jobs:
       - name: Apply Defconfig Tweaks
         run: |
           cd kernel
-          # Enable KernelSU and required Kprobes options inside target defconfig
-          echo "CONFIG_KSU=y" >> arch/arm64/configs/vendor/munch_user_defconfig
-          echo "CONFIG_KPROBES=y" >> arch/arm64/configs/vendor/munch_user_defconfig
-          echo "CONFIG_KPROBE_EVENTS=y" >> arch/arm64/configs/vendor/munch_user_defconfig
-          # Enforce proper overlayfs mapping for module mounting
-          echo "CONFIG_OVERLAY_FS=y" >> arch/arm64/configs/vendor/munch_user_defconfig
+          # Dynamically search and append to the exact location of the target defconfig layout
+          DEFCONFIG_PATH=$(find arch/arm64/configs/ -name "*munch*_defconfig" -o -name "*munch*_user_defconfig" | head -n 1)
+          if [ -z "$DEFCONFIG_PATH" ]; then
+            DEFCONFIG_PATH="arch/arm64/configs/vendor/munch_user_defconfig"
+          fi
+          echo "Targeting defconfig: $DEFCONFIG_PATH"
+          
+          echo "CONFIG_KSU=y" >> $DEFCONFIG_PATH
+          echo "CONFIG_KPROBES=y" >> $DEFCONFIG_PATH
+          echo "CONFIG_KPROBE_EVENTS=y" >> $DEFCONFIG_PATH
+          echo "CONFIG_OVERLAY_FS=y" >> $DEFCONFIG_PATH
 
       - name: Compile Kernel
         run: |
@@ -51,10 +57,14 @@ jobs:
           export SUBARCH=arm64
           export CLANG_TRIPLE=aarch64-linux-gnu-
           
-          # Clean build slate
-          make O=out vendor/munch_user_defconfig
+          # Locating target config string name automatically
+          CONFIG_NAME=$(basename $(find arch/arm64/configs/ -name "*munch*_defconfig" -o -name "*munch*_user_defconfig" | head -n 1))
+          if [ -z "$CONFIG_NAME" ]; then
+            CONFIG_NAME="munch_user_defconfig"
+          fi
           
-          # Fire up multi-threaded compilation
+          make O=out $CONFIG_NAME
+          
           make -j$(nproc --all) O=out \
             CC=clang \
             CROSS_COMPILE=aarch64-linux-gnu- \
@@ -69,10 +79,8 @@ jobs:
       - name: Package with AnyKernel3
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
-          # Replace default template placeholder binary with our freshly compiled image
           cp kernel/out/arch/arm64/boot/Image AnyKernel3/
           cd AnyKernel3
-          # Adjust AnyKernel configurations for munch (sm8250 dynamic slots layout)
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           sed -i 's/block=\/dev\/block\/platform\/omap\/omap_hsmmc.0\/by-name\/boot;/block=auto;/g' anykernel.sh
           zip -r9 ../KSU_Next_Munch_Kernel.zip * -x .git* README.md
