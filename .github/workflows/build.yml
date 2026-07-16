@@ -20,17 +20,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf lib32readline-dev lib32z1-dev libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev cpio
 
-      - name: Clone Specific AOSP Clang Toolchain
+      - name: Download AOSP Clang Toolchain
         run: |
-          mkdir clang
-          cd clang
-          git init
-          git remote add origin https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86
-          git config core.sparseCheckout true
-          # Instruct git to match only the versioned folder path we need
-          echo "clang-r510928/*" >> .git/info/sparse-checkout
-          # Fetch only the exact folder configuration from the stable Android release branch line
-          git pull --depth=1 origin refs/tags/android-14.0.0_r33
+          mkdir -p clang
+          # Fetches a pre-packaged, standalone build of the exact AOSP r510928 compiler engine
+          curl -Lo clang.tar.gz "https://gitlab.com/flar2/twb/-/raw/main/clang-r510928.tar.gz"
+          tar -xzf clang.tar.gz -C clang
+          rm clang.tar.gz
 
       - name: Clone Kernel Source
         run: |
@@ -45,7 +41,7 @@ jobs:
       - name: Apply Defconfig Tweaks Safely
         run: |
           cd kernel
-          # Grouped find expression fixes precedence issues
+          # Grouped find expression to locate the dynamic target configuration file
           DEFCONFIG_PATH=$(find arch/arm64/configs -type f \( -name "*munch*_defconfig" -o -name "*munch*_user_defconfig" \) | head -n 1)
           
           if [ -z "$DEFCONFIG_PATH" ]; then
@@ -55,7 +51,7 @@ jobs:
           fi
           echo "Targeting configuration file: $DEFCONFIG_PATH"
           
-          # Idempotent editing: check if the string exists before appending to prevent line bloat
+          # Idempotent editing: verify line parameters before appending to prevent loop conflicts
           grep -q '^CONFIG_KSU=' "$DEFCONFIG_PATH" || echo "CONFIG_KSU=y" >> "$DEFCONFIG_PATH"
           grep -q '^CONFIG_KPROBES=' "$DEFCONFIG_PATH" || echo "CONFIG_KPROBES=y" >> "$DEFCONFIG_PATH"
           grep -q '^CONFIG_KPROBE_EVENTS=' "$DEFCONFIG_PATH" || echo "CONFIG_KPROBE_EVENTS=y" >> "$DEFCONFIG_PATH"
@@ -64,22 +60,25 @@ jobs:
       - name: Compile Kernel
         run: |
           cd kernel
-          # Route the system PATH straight into the newly structured sparse directory layout
-          export PATH="$(pwd)/../clang/clang-r510928/bin:$PATH"
+          # Path routes perfectly into the newly extracted toolchain bin structure
+          export PATH="$(pwd)/../clang/bin:$PATH"
           
+          # Dynamic target lookup for compilation commands
           CONFIG_NAME=$(basename $(find arch/arm64/configs -type f \( -name "*munch*_defconfig" -o -name "*munch*_user_defconfig" \) | head -n 1))
           if [ -z "$CONFIG_NAME" ]; then
             CONFIG_NAME="munch_defconfig"
           fi
           
           make O=out ARCH=arm64 $CONFIG_NAME
+          
+          # Build via modern unified LLVM engine parameters
           make -j$(nproc --all) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1
 
       - name: Package with AnyKernel3
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
           
-          # Dynamically capture compressed Image.gz target outputs
+          # Dynamically captures the compressed kernel image target
           if [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
             cp kernel/out/arch/arm64/boot/Image.gz AnyKernel3/
           else
@@ -87,10 +86,10 @@ jobs:
           fi
           
           cd AnyKernel3
-          # Clean fallback configuration mappings for partition blocks
+          # Clean architecture adjustments for generic dynamic block partitions mapping
           sed -i 's/block=\/dev\/block\/platform\/omap\/omap_hsmmc.0\/by-name\/boot;/block=auto;/g' anykernel.sh
           
-          # Set the explicit target device verification identity to protect against cross-flashing safety bugs
+          # Set explicit target identification identity parameters to enforce device verification checks
           sed -i 's/device.name1=/device.name1=munch/g' anykernel.sh
           
           zip -r9 ../KSU_Next_Munch_Kernel.zip * -x .git* README.md
